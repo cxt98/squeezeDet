@@ -148,6 +148,8 @@ class ModelSkeleton:
 
       # probability
       num_class_probs = mc.ANCHOR_PER_GRID*mc.CLASSES
+      print(num_class_probs)
+      print(preds[:, :, :, :num_class_probs].shape)
       self.pred_class_probs = tf.reshape(
           tf.nn.softmax(
               tf.reshape(
@@ -281,6 +283,7 @@ class ModelSkeleton:
 
       self.det_probs = tf.reduce_max(probs, 2, name='score')
       self.det_class = tf.argmax(probs, 2, name='class_idx')
+      self.final_class_prob = probs
 
   def _add_loss_graph(self):
     """Define the loss operation."""
@@ -707,7 +710,6 @@ class ModelSkeleton:
       final_cls_idx: array of filtered class indices
     """
     mc = self.mc
-
     if mc.TOP_N_DETECTION < len(probs) and mc.TOP_N_DETECTION > 0:
       order = probs.argsort()[:-mc.TOP_N_DETECTION-1:-1]
       probs = probs[order]

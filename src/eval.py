@@ -32,9 +32,9 @@ tf.app.flags.DEFINE_string('image_set', 'test',
 tf.app.flags.DEFINE_string('year', '2007',
                             """VOC challenge year. 2007 or 2012"""
                             """Only used for VOC data""")
-tf.app.flags.DEFINE_string('eval_dir', '/tmp/bichen/logs/squeezeDet/eval',
+tf.app.flags.DEFINE_string('eval_dir', '/tmp/logs/squeezeDet/eval',
                             """Directory where to write event logs """)
-tf.app.flags.DEFINE_string('checkpoint_path', '/tmp/bichen/logs/squeezeDet/train',
+tf.app.flags.DEFINE_string('checkpoint_path', '/tmp/logs/squeezeDet/train',
                             """Path to the training checkpoint.""")
 tf.app.flags.DEFINE_integer('eval_interval_secs', 60 * 1,
                              """How often to check if new cpt is saved.""")
@@ -59,7 +59,6 @@ def eval_once(
     global_step = ckpt_path.split('/')[-1].split('-')[-1]
 
     num_images = len(imdb.image_idx)
-
     all_boxes = [[[] for _ in xrange(num_images)]
                  for _ in xrange(imdb.num_classes)]
 

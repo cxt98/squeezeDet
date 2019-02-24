@@ -32,7 +32,7 @@ tf.app.flags.DEFINE_string('image_set', 'train',
 tf.app.flags.DEFINE_string('year', '2007',
                             """VOC challenge year. 2007 or 2012"""
                             """Only used for Pascal VOC dataset""")
-tf.app.flags.DEFINE_string('train_dir', '/tmp/bichen/logs/squeezeDet/train',
+tf.app.flags.DEFINE_string('train_dir', '/tmp/logs/squeezeDet/train',
                             """Directory where to write event logs """
                             """and checkpoint.""")
 tf.app.flags.DEFINE_integer('max_steps', 1000000,
@@ -264,6 +264,7 @@ def train():
 
     # try: 
     for step in xrange(FLAGS.max_steps):
+    # for step in xrange(1):
       if coord.should_stop():
         sess.run(model.FIFOQueue.close(cancel_pending_enqueues=True))
         coord.request_stop()

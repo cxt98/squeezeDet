@@ -23,7 +23,8 @@ def base_model_config(dataset='PASCAL_VOC'):
                        'horse', 'motorbike', 'person', 'pottedplant', 'sheep',
                        'sofa', 'train', 'tvmonitor')
   elif cfg.DATASET == 'KITTI':
-    cfg.CLASS_NAMES = ('car', 'pedestrian', 'cyclist')
+    # cfg.CLASS_NAMES = ('car', 'pedestrian', 'cyclist')
+    cfg.CLASS_NAMES = ('blue_cup', 'clorox', 'coke', 'detergent', 'downy', 'ranch', 'red_bowl', 'salt', 'scotch_brite', 'spray_bottle', 'sugar', 'sunscreen', 'tide', 'toy', 'waterpot')
 
   # number of categories to classify
   cfg.CLASSES = len(cfg.CLASS_NAMES)    

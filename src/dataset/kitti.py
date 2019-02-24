@@ -143,12 +143,12 @@ class kitti(imdb):
       if os.path.exists(det_file_name):
         with open(det_file_name, 'r') as f:
           lines = f.readlines()
-        assert len(lines) == 3, \
-            'Line number of {} should be 3'.format(det_file_name)
+        # assert len(lines) == 3, \
+        #     'Line number of {} should be 3'.format(det_file_name)
 
         aps.append(float(lines[0].split('=')[1].strip()))
-        aps.append(float(lines[1].split('=')[1].strip()))
-        aps.append(float(lines[2].split('=')[1].strip()))
+        aps.append(float(lines[0].split('=')[1].strip()))
+        aps.append(float(lines[0].split('=')[1].strip()))
       else:
         aps.extend([0.0, 0.0, 0.0])
 
