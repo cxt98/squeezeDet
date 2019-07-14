@@ -23,11 +23,22 @@ def base_model_config(dataset='PASCAL_VOC'):
                        'horse', 'motorbike', 'person', 'pottedplant', 'sheep',
                        'sofa', 'train', 'tvmonitor')
   elif cfg.DATASET == 'KITTI':
-    # cfg.CLASS_NAMES = ('car', 'pedestrian', 'cyclist')
-    cfg.CLASS_NAMES = ('blue_cup', 'clorox', 'coke', 'detergent', 'downy', 'ranch', 'red_bowl', 'salt', 'scotch_brite', 'spray_bottle', 'sugar', 'sunscreen', 'tide', 'toy', 'waterpot')
-
+   # cfg.CLASS_NAMES = ('car', 'pedestrian', 'cyclist')
+    # cfg.CLASS_NAMES = ('blue_cup', 'clorox', 'coke', 'detergent', 'downy', 'ranch', 'red_bowl', 'salt', 'scotch_brite', 'spray_bottle', 'sugar', 'sunscreen', 'tide', 'toy', 'waterpot')
+    # cfg.CLASS_NAMES = ('006_mustard_bottle', '061_foam_brick', '025_mug',
+    #  '021_bleach_cleanser', '051_large_clamp', '035_power_drill', 
+    #  '024_bowl', '005_tomato_soup_can', '009_gelatin_box', '004_sugar_box', 
+    #  '019_pitcher_base', 'background', '037_scissors', '052_extra_large_clamp',
+    #   '040_large_marker', '010_potted_meat_can', '002_master_chef_can', 
+    #   '007_tuna_fish_can', '036_wood_block', '008_pudding_box', '003_cracker_box', 
+    #   '011_banana')
+    cfg.CLASS_NAMES = ('002_master_chef_can', '003_cracker_box', '004_sugar_box', '005_tomato_soup_can', '006_mustard_bottle', 
+      '007_tuna_fish_can','008_pudding_box', '009_gelatin_box', '010_potted_meat_can', '011_banana',
+     '019_pitcher_base', '021_bleach_cleanser', '024_bowl','025_mug', 
+      '035_power_drill', '036_wood_block', '037_scissors', '040_large_marker','051_large_clamp','052_extra_large_clamp', '061_foam_brick')
   # number of categories to classify
-  cfg.CLASSES = len(cfg.CLASS_NAMES)    
+  cfg.CLASSES = len(cfg.CLASS_NAMES)
+  print(cfg.CLASSES)    
 
   # ROI pooling output width
   cfg.GRID_POOL_WIDTH = 7
@@ -49,9 +60,17 @@ def base_model_config(dataset='PASCAL_VOC'):
 
   # anchor box, array of [cx, cy, w, h]. To be defined later
   cfg.ANCHOR_BOX = []
+  cfg.ANCHOR_BOX2 = []
+  cfg.ANCHOR_BOX3 = []
 
+  cfg.ANCHOR_SHAPE       = np.array(
+                                [[  36.,  37.], [ 366., 174.], [ 115.,  59.],
+                                 [ 162.,  87.], [  38.,  90.], [ 258., 173.],
+                                 [ 224., 108.], [  78., 170.], [  72.,  43.]])
+  cfg.SCALE_SIZE =1
   # number of anchor boxes
   cfg.ANCHORS = len(cfg.ANCHOR_BOX)
+  cfg.ANCHOR_TOTAL = cfg.ANCHORS 
 
   # number of anchor boxes per grid
   cfg.ANCHOR_PER_GRID = -1

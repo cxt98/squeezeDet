@@ -31,6 +31,10 @@ models: SqueezeDet, SqueezeDet+, VGG16+ConvDet, ResNet50+ConvDet.
   python ./src/demo.py --mode image --input_path './data/progress_kitti/testing/image_2/exp*.png' --checkpoint /tmp/logs/SqueezeDet/train/model.ckpt-11000
   ```
 
+  '''Shell
+  python ./src/demo.py --mode image --input_path './data/progress_kitti/testing/image_2/exp*.png' --checkpoint ./data/model_checkpoints/squeezeDet/model.ckpt-12000
+'''
+
 ## Visualization
 - We can visualize either all bbox above certain confidence threshold or heatmap for any class. To do so
   ```Shell

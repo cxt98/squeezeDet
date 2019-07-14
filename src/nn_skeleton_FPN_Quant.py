@@ -13,7 +13,10 @@ from utils import util
 from easydict import EasyDict as edict
 import numpy as np
 import tensorflow as tf
-
+from config.kitti_vgg16_config import set_anchors
+from tensorpack import *
+from utils import dorefa
+from tensorpack.tfutils.varreplace import remap_variables
 
 def _add_loss_summaries(total_loss):
   """Add summaries for losses
@@ -69,14 +72,14 @@ def _variable_with_weight_decay(name, shape, wd, initializer, trainable=True):
     tf.add_to_collection('losses', weight_decay)
   return var
 
-class ModelSkeleton:
+class ModelSkeleton_FPN_Quant:
   """Base class of NN detection models."""
   def __init__(self, mc):
     self.mc = mc
     # a scalar tensor in range (0, 1]. Usually set to 0.5 in training phase and
     # 1.0 in evaluation phase
     self.keep_prob = 0.5 if mc.IS_TRAINING else 1.0
-
+    self.gamma = 2
     # image batch input
     self.ph_image_input = tf.placeholder(
         tf.float32, [mc.BATCH_SIZE, mc.IMAGE_HEIGHT, mc.IMAGE_WIDTH, 3],
@@ -85,20 +88,20 @@ class ModelSkeleton:
     # A tensor where an element is 1 if the corresponding box is "responsible"
     # for detection an object and 0 otherwise.
     self.ph_input_mask = tf.placeholder(
-        tf.float32, [mc.BATCH_SIZE, mc.ANCHORS, 1], name='box_mask')
+        tf.float32, [mc.BATCH_SIZE, mc.ANCHOR_TOTAL, 1], name='box_mask')
     # Tensor used to represent bounding box deltas.
     self.ph_box_delta_input = tf.placeholder(
-        tf.float32, [mc.BATCH_SIZE, mc.ANCHORS, 4], name='box_delta_input')
+        tf.float32, [mc.BATCH_SIZE, mc.ANCHOR_TOTAL, 4], name='box_delta_input')
     # Tensor used to represent bounding box coordinates.
     self.ph_box_input = tf.placeholder(
-        tf.float32, [mc.BATCH_SIZE, mc.ANCHORS, 4], name='box_input')
+        tf.float32, [mc.BATCH_SIZE, mc.ANCHOR_TOTAL, 4], name='box_input')
     # Tensor used to represent labels
     self.ph_labels = tf.placeholder(
-        tf.float32, [mc.BATCH_SIZE, mc.ANCHORS, mc.CLASSES], name='labels')
+        tf.float32, [mc.BATCH_SIZE, mc.ANCHOR_TOTAL, mc.CLASSES], name='labels')
 
     # IOU between predicted anchors with ground-truth boxes
     self.ious = tf.Variable(
-      initial_value=np.zeros((mc.BATCH_SIZE, mc.ANCHORS)), trainable=False,
+      initial_value=np.zeros((mc.BATCH_SIZE, mc.ANCHOR_TOTAL)), trainable=False,
       name='iou', dtype=tf.float32
     )
 
@@ -107,10 +110,10 @@ class ModelSkeleton:
         dtypes=[tf.float32, tf.float32, tf.float32, 
                 tf.float32, tf.float32],
         shapes=[[mc.IMAGE_HEIGHT, mc.IMAGE_WIDTH, 3],
-                [mc.ANCHORS, 1],
-                [mc.ANCHORS, 4],
-                [mc.ANCHORS, 4],
-                [mc.ANCHORS, mc.CLASSES]],
+                [mc.ANCHOR_TOTAL, 1],
+                [mc.ANCHOR_TOTAL, 4],
+                [mc.ANCHOR_TOTAL, 4],
+                [mc.ANCHOR_TOTAL, mc.CLASSES]],
     )
 
     self.enqueue_op = self.FIFOQueue.enqueue_many(
@@ -134,6 +137,11 @@ class ModelSkeleton:
     self.activation_counter = [] # array of tuple of layer name, output activations
     self.activation_counter.append(('input', mc.IMAGE_WIDTH*mc.IMAGE_HEIGHT*3))
 
+    self.BITW = 32
+    self.BITA = 32
+    self.BITG = 32
+    self.fw, self.fa, _ = dorefa.get_dorefa(self.BITW, self.BITA, self.BITG)
+
 
   def _add_forward_graph(self):
     """NN architecture specification."""
@@ -144,100 +152,117 @@ class ModelSkeleton:
     mc = self.mc
 
     with tf.variable_scope('interpret_output') as scope:
-      preds = self.preds
+      
+      def _get_output(preds, ANCHORS):
+        # set_anchors(mc, scale)
+        print("mc.ANCHORS", ANCHORS)
+        num_class_probs = mc.ANCHOR_PER_GRID*mc.CLASSES
+        pred_class_probs = tf.reshape(
+            tf.nn.softmax(
+                tf.reshape(
+                    preds[:, :, :, :num_class_probs],
+                    [-1, mc.CLASSES]
+                )
+            ),
+            [mc.BATCH_SIZE, ANCHORS, mc.CLASSES],
+            name='pred_class_probs'
+        )
+        # print(pred_class_probs.shape)
+        
+        # confidence
+        num_confidence_scores = mc.ANCHOR_PER_GRID+num_class_probs
+        pred_conf = tf.sigmoid(
+            tf.reshape(
+                preds[:, :, :, num_class_probs:num_confidence_scores],
+                [mc.BATCH_SIZE, ANCHORS]
+            ),
+            name='pred_confidence_score'
+        )
+
+        # bbox_delta
+        pred_bbox_delta = tf.reshape(
+            preds[:, :, :, num_confidence_scores:],
+            [mc.BATCH_SIZE, ANCHORS, 4],
+            name='bbox_delta'
+        )
+        return pred_class_probs, pred_conf, pred_bbox_delta
+
+      self.pred_class_probs1, self.pred_conf1, self.pred_bbox_delta1 = _get_output(self.preds, mc.ANCHORS)
+      self.pred_class_probs2, self.pred_conf2, self.pred_bbox_delta2 = _get_output(self.preds_p4, mc.ANCHORS2)
+      self.pred_class_probs3, self.pred_conf3, self.pred_bbox_delta3 = _get_output(self.preds_p3, mc.ANCHORS3)
 
       # probability
-      num_class_probs = mc.ANCHOR_PER_GRID*mc.CLASSES
-      print(num_class_probs)
-      print(preds[:, :, :, :num_class_probs].shape)
-      self.pred_class_probs = tf.reshape(
-          tf.nn.softmax(
-              tf.reshape(
-                  preds[:, :, :, :num_class_probs],
-                  [-1, mc.CLASSES]
-              )
-          ),
-          [mc.BATCH_SIZE, mc.ANCHORS, mc.CLASSES],
-          name='pred_class_probs'
-      )
-      
-      # confidence
-      num_confidence_scores = mc.ANCHOR_PER_GRID+num_class_probs
-      self.pred_conf = tf.sigmoid(
-          tf.reshape(
-              preds[:, :, :, num_class_probs:num_confidence_scores],
-              [mc.BATCH_SIZE, mc.ANCHORS]
-          ),
-          name='pred_confidence_score'
-      )
 
-      # bbox_delta
-      self.pred_box_delta = tf.reshape(
-          preds[:, :, :, num_confidence_scores:],
-          [mc.BATCH_SIZE, mc.ANCHORS, 4],
-          name='bbox_delta'
-      )
 
       # number of object. Used to normalize bbox and classification loss
       self.num_objects = tf.reduce_sum(self.input_mask, name='num_objects')
 
-    with tf.variable_scope('bbox') as scope:
+    with tf.variable_scope('bbox') as scope:        
       with tf.variable_scope('stretching'):
-        delta_x, delta_y, delta_w, delta_h = tf.unstack(
-            self.pred_box_delta, axis=2)
+        def _define_bbox(pred_bbox_delta, ANCHOR_BOX):
+          delta_x, delta_y, delta_w, delta_h = tf.unstack(
+              pred_bbox_delta, axis=2)
+          # set_anchors(mc, scale)
+          anchor_x = ANCHOR_BOX[:, 0]
+          anchor_y = ANCHOR_BOX[:, 1]
+          anchor_w = ANCHOR_BOX[:, 2]
+          anchor_h = ANCHOR_BOX[:, 3]
 
-        anchor_x = mc.ANCHOR_BOX[:, 0]
-        anchor_y = mc.ANCHOR_BOX[:, 1]
-        anchor_w = mc.ANCHOR_BOX[:, 2]
-        anchor_h = mc.ANCHOR_BOX[:, 3]
+          box_center_x = tf.identity(
+              anchor_x + delta_x * anchor_w, name='bbox_cx')
+          box_center_y = tf.identity(
+              anchor_y + delta_y * anchor_h, name='bbox_cy')
+          box_width = tf.identity(
+              anchor_w * util.safe_exp(delta_w, mc.EXP_THRESH),
+              name='bbox_width')
+          box_height = tf.identity(
+              anchor_h * util.safe_exp(delta_h, mc.EXP_THRESH),
+              name='bbox_height')
 
-        box_center_x = tf.identity(
-            anchor_x + delta_x * anchor_w, name='bbox_cx')
-        box_center_y = tf.identity(
-            anchor_y + delta_y * anchor_h, name='bbox_cy')
-        box_width = tf.identity(
-            anchor_w * util.safe_exp(delta_w, mc.EXP_THRESH),
-            name='bbox_width')
-        box_height = tf.identity(
-            anchor_h * util.safe_exp(delta_h, mc.EXP_THRESH),
-            name='bbox_height')
+          self._activation_summary(delta_x, 'delta_x')
+          self._activation_summary(delta_y, 'delta_y')
+          self._activation_summary(delta_w, 'delta_w')
+          self._activation_summary(delta_h, 'delta_h')
 
-        self._activation_summary(delta_x, 'delta_x')
-        self._activation_summary(delta_y, 'delta_y')
-        self._activation_summary(delta_w, 'delta_w')
-        self._activation_summary(delta_h, 'delta_h')
+          self._activation_summary(box_center_x, 'bbox_cx')
+          self._activation_summary(box_center_y, 'bbox_cy')
+          self._activation_summary(box_width, 'bbox_width')
+          self._activation_summary(box_height, 'bbox_height')
 
-        self._activation_summary(box_center_x, 'bbox_cx')
-        self._activation_summary(box_center_y, 'bbox_cy')
-        self._activation_summary(box_width, 'bbox_width')
-        self._activation_summary(box_height, 'bbox_height')
+          with tf.variable_scope('trimming'):
+            xmins, ymins, xmaxs, ymaxs = util.bbox_transform(
+                [box_center_x, box_center_y, box_width, box_height])
 
-      with tf.variable_scope('trimming'):
-        xmins, ymins, xmaxs, ymaxs = util.bbox_transform(
-            [box_center_x, box_center_y, box_width, box_height])
+            # The max x position is mc.IMAGE_WIDTH - 1 since we use zero-based
+            # pixels. Same for y.
+            xmins = tf.minimum(
+                tf.maximum(0.0, xmins), mc.IMAGE_WIDTH-1.0, name='bbox_xmin')
+            self._activation_summary(xmins, 'box_xmin')
 
-        # The max x position is mc.IMAGE_WIDTH - 1 since we use zero-based
-        # pixels. Same for y.
-        xmins = tf.minimum(
-            tf.maximum(0.0, xmins), mc.IMAGE_WIDTH-1.0, name='bbox_xmin')
-        self._activation_summary(xmins, 'box_xmin')
+            ymins = tf.minimum(
+                tf.maximum(0.0, ymins), mc.IMAGE_HEIGHT-1.0, name='bbox_ymin')
+            self._activation_summary(ymins, 'box_ymin')
 
-        ymins = tf.minimum(
-            tf.maximum(0.0, ymins), mc.IMAGE_HEIGHT-1.0, name='bbox_ymin')
-        self._activation_summary(ymins, 'box_ymin')
+            xmaxs = tf.maximum(
+                tf.minimum(mc.IMAGE_WIDTH-1.0, xmaxs), 0.0, name='bbox_xmax')
+            self._activation_summary(xmaxs, 'box_xmax')
 
-        xmaxs = tf.maximum(
-            tf.minimum(mc.IMAGE_WIDTH-1.0, xmaxs), 0.0, name='bbox_xmax')
-        self._activation_summary(xmaxs, 'box_xmax')
+            ymaxs = tf.maximum(
+                tf.minimum(mc.IMAGE_HEIGHT-1.0, ymaxs), 0.0, name='bbox_ymax')
+            self._activation_summary(ymaxs, 'box_ymax')
 
-        ymaxs = tf.maximum(
-            tf.minimum(mc.IMAGE_HEIGHT-1.0, ymaxs), 0.0, name='bbox_ymax')
-        self._activation_summary(ymaxs, 'box_ymax')
+            det_boxes = tf.transpose(
+                tf.stack(util.bbox_transform_inv([xmins, ymins, xmaxs, ymaxs])),
+                (1, 2, 0), name='bbox'
+            )
+          return det_boxes
 
-        self.det_boxes = tf.transpose(
-            tf.stack(util.bbox_transform_inv([xmins, ymins, xmaxs, ymaxs])),
-            (1, 2, 0), name='bbox'
-        )
+
+      self.det_boxes1 = _define_bbox(self.pred_bbox_delta1, mc.ANCHOR_BOX)
+      self.det_boxes2 = _define_bbox(self.pred_bbox_delta2, mc.ANCHOR_BOX2)
+      self.det_boxes3 = _define_bbox(self.pred_bbox_delta3, mc.ANCHOR_BOX3)
+
+
 
     with tf.variable_scope('IOU'):
       def _tensor_iou(box1, box2):
@@ -260,7 +285,10 @@ class ModelSkeleton:
           union = w1*h1 + w2*h2 - intersection
 
         return intersection/(union+mc.EPSILON) \
-            * tf.reshape(self.input_mask, [mc.BATCH_SIZE, mc.ANCHORS])
+            * tf.reshape(self.input_mask, [mc.BATCH_SIZE, mc.ANCHOR_TOTAL])
+
+      self.det_boxes = tf.concat([self.det_boxes1, self.det_boxes2, self.det_boxes3], 1, name="det_boxes_concat")
+
 
       self.ious = self.ious.assign(
           _tensor_iou(
@@ -268,22 +296,42 @@ class ModelSkeleton:
               util.bbox_transform(tf.unstack(self.box_input, axis=2))
           )
       )
+
       self._activation_summary(self.ious, 'conf_score')
 
     with tf.variable_scope('probability') as scope:
-      self._activation_summary(self.pred_class_probs, 'class_probs')
+      # self._activation_summary(self.pred_class_probs, 'class_probs')
+      def _get_probability(pred_class_probs, pred_conf, ANCHORS):
+        # print("pred_class_prob", pred_class_probs.shape, "pred_conf: ", pred_conf.shape)
+        probs = tf.multiply(
+            pred_class_probs,
+            tf.reshape(pred_conf, [mc.BATCH_SIZE, ANCHORS, 1]),
+            name='final_class_prob'
+        )
+        return probs
+      
+      probs1 = _get_probability(self.pred_class_probs1, self.pred_conf1, mc.ANCHORS)
+      probs2 = _get_probability(self.pred_class_probs2, self.pred_conf2, mc.ANCHORS2)
+      probs3 = _get_probability(self.pred_class_probs3, self.pred_conf3, mc.ANCHORS3)
+      # self._activation_summary(probs1, 'final_class_prob')
+      self.final_class_prob = tf.concat([probs1, probs2, probs3], 1, "final_class_prob_concat")
 
-      probs = tf.multiply(
-          self.pred_class_probs,
-          tf.reshape(self.pred_conf, [mc.BATCH_SIZE, mc.ANCHORS, 1]),
-          name='final_class_prob'
-      )
+      self.det_probs1 = tf.reduce_max(probs1, 2, name='score1')
+      self.det_probs2 = tf.reduce_max(probs2, 2, name='score2')
+      self.det_probs3 = tf.reduce_max(probs3, 2, name='score3')
 
-      self._activation_summary(probs, 'final_class_prob')
+      self.det_probs = tf.concat([self.det_probs1, self.det_probs2, self.det_probs3], 1, name="det_probs_concat")
 
-      self.det_probs = tf.reduce_max(probs, 2, name='score')
-      self.det_class = tf.argmax(probs, 2, name='class_idx')
-      self.final_class_prob = probs
+
+      self.det_class1 = tf.argmax(probs1, 2, name='class_idx1')
+      self.det_class2 = tf.argmax(probs2, 2, name='class_idx2')
+      self.det_class3 = tf.argmax(probs3, 2, name='class_idx3')
+
+      self.det_class = tf.concat([self.det_class1, self.det_class2, self.det_class3], 1, name="det_class_concat")
+
+      # self.final_class_prob1 = probs1
+      # self.final_class_prob2 = probs2
+      # self.final_class_prob3 = probs3
 
   def _add_loss_graph(self):
     """Define the loss operation."""
@@ -297,38 +345,66 @@ class ModelSkeleton:
       #         (self.labels*(-tf.log(self.pred_class_probs+mc.EPSILON))
       #          + (1-self.labels)*(-tf.log(1-self.pred_class_probs+mc.EPSILON)))
       #         * self.input_mask * mc.LOSS_COEF_CLASS),
-      self.class_loss = tf.truediv(
+      
+      def _class_loss(pred_class_probs):
+        # focal loss
+        return tf.truediv(
           tf.reduce_sum(
-              (self.labels*(-tf.log(self.pred_class_probs+mc.EPSILON))
-               + (1-self.labels)*(-tf.log(1-self.pred_class_probs+mc.EPSILON)))
+              ( pow((1-pred_class_probs + mc.EPSILON), self.gamma) * self.labels*(-tf.log(pred_class_probs+mc.EPSILON))
+               + pow((pred_class_probs + mc.EPSILON), self.gamma)* (1-self.labels)*(-tf.log(1-pred_class_probs+mc.EPSILON)))
                * self.input_mask * mc.LOSS_COEF_CLASS),
           self.num_objects,
           name='class_loss'
-      )
+        )
+        # return tf.truediv(
+        #   tf.reduce_sum(
+        #       (self.labels*(-tf.log(pred_class_probs+mc.EPSILON))
+        #        + (1-self.labels)*(-tf.log(1-pred_class_probs+mc.EPSILON)))
+        #        * self.input_mask * mc.LOSS_COEF_CLASS),
+        #   self.num_objects,
+        #   name='class_loss'
+        # )
+
+      self.pred_class_probs = tf.concat([self.pred_class_probs1, self.pred_class_probs2, self.pred_class_probs3], 1)
+      self.class_loss = _class_loss(self.pred_class_probs)
+      
       tf.add_to_collection('losses', self.class_loss)
 
     with tf.variable_scope('confidence_score_regression') as scope:
-      input_mask = tf.reshape(self.input_mask, [mc.BATCH_SIZE, mc.ANCHORS])
-      self.conf_loss = tf.reduce_mean(
-          tf.reduce_sum(
-              tf.square((self.ious - self.pred_conf)) 
-              * (input_mask*mc.LOSS_COEF_CONF_POS/self.num_objects
-                 +(1-input_mask)*mc.LOSS_COEF_CONF_NEG/(mc.ANCHORS-self.num_objects)),
-              reduction_indices=[1]
-          ),
-          name='confidence_loss'
-      )
+      def _confidence_score_loss(ious, pred_conf):
+        input_mask = tf.reshape(self.input_mask, [mc.BATCH_SIZE, mc.ANCHOR_TOTAL])
+        num_objects = tf.expand_dims(tf.reduce_sum(input_mask, axis=1), 1)
+        return tf.reduce_mean(
+            tf.reduce_sum(
+                tf.square((ious - pred_conf)) 
+                * (input_mask*mc.LOSS_COEF_CONF_POS/num_objects
+                   +(1-input_mask)*mc.LOSS_COEF_CONF_NEG/(mc.ANCHOR_TOTAL-num_objects)),
+                reduction_indices=[1]
+            ),
+            name='confidence_loss'
+        )
+
+      self.pred_conf = tf.concat([self.pred_conf1, self.pred_conf2, self.pred_conf3], 1)
+      self._activation_summary(self.pred_conf, "pred_conf_score")
+
+      self.conf_loss = _confidence_score_loss(self.ious, self.pred_conf)
+      
       tf.add_to_collection('losses', self.conf_loss)
-      tf.summary.scalar('mean iou', tf.reduce_sum(self.ious)/self.num_objects)
+       # tf.summary.scalar('mean iou', tf.reduce_sum(self.ious)/self.num_objects)
 
     with tf.variable_scope('bounding_box_regression') as scope:
-      self.bbox_loss = tf.truediv(
-          tf.reduce_sum(
-              mc.LOSS_COEF_BBOX * tf.square(
-                  self.input_mask*(self.pred_box_delta-self.box_delta_input))),
-          self.num_objects,
-          name='bbox_loss'
-      )
+      def _bounding_box_loss(pred_box_delta):
+        return tf.truediv(
+            tf.reduce_sum(
+                mc.LOSS_COEF_BBOX * tf.square(
+                    self.input_mask*(pred_box_delta-self.box_delta_input))),
+            self.num_objects,
+            name='bbox_loss'
+        )
+
+      self.pred_bbox_delta = tf.concat([self.pred_bbox_delta1, self.pred_bbox_delta2, self.pred_bbox_delta3], 1)
+      # self.bbox_loss = _bounding_box_loss(self.pred_bbox_delta1) + _bounding_box_loss(self.pred_bbox_delta2) + _bounding_box_loss(self.pred_bbox_delta3)
+      self.bbox_loss = _bounding_box_loss(self.pred_bbox_delta)
       tf.add_to_collection('losses', self.bbox_loss)
 
     # add above losses as well as weight decay losses to form the total loss
@@ -380,7 +456,7 @@ class ModelSkeleton:
         max_outputs=mc.BATCH_SIZE)
 
   def _conv_bn_layer(
-      self, inputs, conv_param_name, bn_param_name, scale_param_name, filters,
+      self, inputs, conv_param_name, bn_param_name, filters,
       size, stride, padding='SAME', freeze=False, relu=True,
       conv_with_bias=False, stddev=0.001):
     """ Convolution + BatchNorm + [relu] layer. Batch mean and var are treated
@@ -411,13 +487,13 @@ class ModelSkeleton:
 
       if mc.LOAD_PRETRAINED_MODEL:
         cw = self.caffemodel_weight
-        kernel_val = np.transpose(cw[conv_param_name][0], [2,3,1,0])
+        kernel_val = np.transpose(cw[conv_param_name+".weight"], [2,3,1,0])
         if conv_with_bias:
           bias_val = cw[conv_param_name][1]
-        mean_val   = cw[bn_param_name][0]
-        var_val    = cw[bn_param_name][1]
-        gamma_val  = cw[scale_param_name][0]
-        beta_val   = cw[scale_param_name][1]
+        mean_val   = cw[bn_param_name+".running_mean"]
+        var_val    = cw[bn_param_name+".running_var"]
+        gamma_val  = cw[bn_param_name+".weight"]
+        beta_val   = cw[bn_param_name+".bias"]
       else:
         kernel_val = tf.truncated_normal_initializer(
             stddev=stddev, dtype=tf.float32)
@@ -471,14 +547,22 @@ class ModelSkeleton:
       )
 
       if relu:
-        return tf.nn.relu(conv)
+        return tf.nn.leaky_relu(conv,alpha=0.1)
       else:
         return conv
 
 
   def _upsample_add(self, inputs1, inputs2):
     _,H,W, _ = inputs2.get_shape().as_list() 
-    return tf.image.resize_nearest_neighbor(inputs2, [H,W]) + inputs2
+    # return tf.image.resize_nearest_neighbor(inputs2, [H,W]) + inputs2
+    return tf.image.resize_nearest_neighbor(inputs1, [H,W]) + inputs2
+
+  def new_get_variable(self,v):
+    name = v.op.name
+    if not name.endswith('W') or not name.endswith('b') or 'conv1' in name:
+      return v
+    else:
+      return self.fw(v)
 
   def _conv_layer(
       self, layer_name, inputs, filters, size, stride, padding='SAME',
@@ -516,7 +600,7 @@ class ModelSkeleton:
           print ('Shape of the pretrained parameter of {} does not match, '
               'use randomly initialized parameter'.format(layer_name))
       #special case for zynqnet pretrained model
-      if layer_name + '_weights' in cw:
+      elif layer_name + '_weights' in cw:
         kernel_val = np.transpose(cw[layer_name+'_weights'], [2,3,1,0])
         bias_val = cw[layer_name+'_bias']
         #check the shape
@@ -542,8 +626,8 @@ class ModelSkeleton:
       if use_pretrained_param:
         if mc.DEBUG_MODE:
           print ('Using pretrained model for {}'.format(layer_name))
-        kernel_init = tf.constant(kernel_val , dtype=tf.float32)
-        bias_init = tf.constant(bias_val, dtype=tf.float32)
+        kernel_init = tf.constant_initializer(kernel_val , dtype=tf.float32)
+        bias_init = tf.constant_initializer(bias_val, dtype=tf.float32)
       elif xavier:
         kernel_init = tf.contrib.layers.xavier_initializer_conv2d()
         bias_init = tf.constant_initializer(0.0)
@@ -558,15 +642,19 @@ class ModelSkeleton:
 
       biases = _variable_on_device('biases', [filters], bias_init, 
                                 trainable=(not freeze))
+
+      # if 'conv1' not in kernel.op.name:
+      kernel = self.fw(kernel)
+      biases = self.fw(biases)
       self.model_params += [kernel, biases]
 
+      # with remap_variables(lambda var: self.fw(var)):
       conv = tf.nn.conv2d(
           inputs, kernel, [1, stride, stride, 1], padding=padding,
           name='convolution')
       conv_bias = tf.nn.bias_add(conv, biases, name='bias_add')
-  
       if relu:
-        out = tf.nn.relu(conv_bias, 'relu')
+        out = self.fa(tf.nn.relu(conv_bias, 'relu'))
       else:
         out = conv_bias
 

@@ -21,6 +21,9 @@ from config import *
 from dataset import pascal_voc, kitti
 from utils.util import sparse_to_dense, bgr_to_rgb, bbox_transform
 from nets import *
+import options
+# import test
+import eval_det
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -47,6 +50,8 @@ tf.app.flags.DEFINE_integer('checkpoint_step', 1000,
                             """Number of steps to save summary.""")
 tf.app.flags.DEFINE_string('gpu', '0', """gpu id.""")
 
+tf.app.flags.DEFINE_boolean("resume", False, """resume from a checkpoint""")
+
 
 def _draw_box(im, box_list, label_list, color=(0,255,0), cdict=None, form='center'):
   assert form == 'center' or form == 'diagonal', \
@@ -57,6 +62,7 @@ def _draw_box(im, box_list, label_list, color=(0,255,0), cdict=None, form='cente
     if form == 'center':
       bbox = bbox_transform(bbox)
 
+    # ymin, xmin, ymax, xmax = [int(b) for b in bbox]
     xmin, ymin, xmax, ymax = [int(b) for b in bbox]
 
     l = label.split(':')[0] # text before "CLASS: (PROB)"
@@ -108,9 +114,9 @@ def train():
 
   with tf.Graph().as_default():
 
-    assert FLAGS.net == 'vgg16' or FLAGS.net == 'resnet50' \
-        or FLAGS.net == 'squeezeDet' or FLAGS.net == 'squeezeDet+', \
-        'Selected neural net architecture not supported: {}'.format(FLAGS.net)
+    # assert FLAGS.net == 'vgg16' or FLAGS.net == 'resnet50' \
+    #     or FLAGS.net == 'squeezeDet' or FLAGS.net=="zynqDet" or FLAGS.net == 'squeezeDet+', \
+    #     'Selected neural net architecture not supported: {}'.format(FLAGS.net)
     if FLAGS.net == 'vgg16':
       mc = kitti_vgg16_config()
       mc.IS_TRAINING = True
@@ -131,6 +137,30 @@ def train():
       mc.IS_TRAINING = True
       mc.PRETRAINED_MODEL_PATH = FLAGS.pretrained_model_path
       model = SqueezeDetPlus(mc)
+
+    elif FLAGS.net == "zynqDet":
+      mc = kitti_zynqDet_FPN_config()
+      mc.IS_TRAINING = True
+      mc.PRETRAINED_MODEL_PATH = FLAGS.pretrained_model_path
+      model = ZynqDet_FPN(mc)
+
+    elif FLAGS.net == "squeezeDet_FPN":
+      mc = kitti_squeezeDet_FPN_config()
+      mc.IS_TRAINING = True
+      mc.PRETRAINED_MODEL_PATH = FLAGS.pretrained_model_path
+      model = SqueezeDet_FPN(mc)
+    elif FLAGS.net == "yolo":
+      mc = kitti_vgg16_config()
+      mc.IS_TRAINING = True
+      mc.PRETRAINED_MODEL_PATH = FLAGS.pretrained_model_path
+      model = tinyDarkNet_FPN(mc)
+    elif FLAGS.net == "ZynqDet_Quant":
+      mc = kitti_zynqDet_FPN_config()
+      mc.IS_TRAINING = True
+      mc.PRETRAINED_MODEL_PATH=FLAGS.pretrained_model_path
+      model = ZynqDet_FPN_Quant(mc)
+    else:
+      assert(0)
 
     imdb = kitti(FLAGS.image_set, FLAGS.data_path, mc)
 
@@ -160,34 +190,73 @@ def train():
     print ('Model statistics saved to {}.'.format(
       os.path.join(FLAGS.train_dir, 'model_metrics.txt')))
 
+
+
+    def _load_data_per_scale(label_per_batch, box_delta_per_batch, aidx_per_batch, bbox_per_batch, s, ANCHORS):
+      label_indices, bbox_indices, box_delta_values, mask_indices, box_values, \
+          = [], [], [], [], []
+      aidx_set = set()
+
+      for i in range(len(label_per_batch)): # batch_size
+        for j in range(len(aidx_per_batch[i][s])): # number of annotations with IOU > 0.5
+          aidx, gt_id = aidx_per_batch[i][s][j]
+
+          if (i, aidx) not in aidx_set:
+            aidx_set.add((i, aidx))
+            label_indices.append(
+                [i, aidx, label_per_batch[i][gt_id]])
+            mask_indices.append([i, aidx])
+            bbox_indices.extend(
+                [[i, aidx, k] for k in range(4)])
+            box_delta_values.extend(box_delta_per_batch[i][s][j])
+            box_values.extend(bbox_per_batch[i][gt_id])
+          else:
+            num_discarded_labels += 1
+
+      input_mask = np.reshape(
+              sparse_to_dense(
+                  mask_indices, [mc.BATCH_SIZE, ANCHORS],
+                  [1.0]*len(mask_indices)),
+              [mc.BATCH_SIZE, ANCHORS, 1])
+      box_delta_input = sparse_to_dense(
+              bbox_indices, [mc.BATCH_SIZE, ANCHORS, 4],
+              box_delta_values)
+      box_input = sparse_to_dense(
+              bbox_indices, [mc.BATCH_SIZE, ANCHORS, 4],
+              box_values)
+      labels = sparse_to_dense(
+              label_indices,
+              [mc.BATCH_SIZE, ANCHORS, mc.CLASSES],
+              [1.0]*len(label_indices))
+
+      return input_mask, box_delta_input, box_input, labels
+
+
     def _load_data(load_to_placeholder=True):
       # read batch input
       image_per_batch, label_per_batch, box_delta_per_batch, aidx_per_batch, \
           bbox_per_batch = imdb.read_batch()
+      # print("label", label_per_batch[0])
+      # print(aidx_per_batch[0])
+      input_mask, box_delta_input, box_input, labels  =\
+      _load_data_per_scale(label_per_batch, box_delta_per_batch, aidx_per_batch, bbox_per_batch, 0, mc.ANCHORS)
 
-      label_indices, bbox_indices, box_delta_values, mask_indices, box_values, \
-          = [], [], [], [], []
-      aidx_set = set()
-      num_discarded_labels = 0
-      num_labels = 0
-      for i in range(len(label_per_batch)): # batch_size
-        for j in range(len(label_per_batch[i])): # number of annotations
-          num_labels += 1
-          if (i, aidx_per_batch[i][j]) not in aidx_set:
-            aidx_set.add((i, aidx_per_batch[i][j]))
-            label_indices.append(
-                [i, aidx_per_batch[i][j], label_per_batch[i][j]])
-            mask_indices.append([i, aidx_per_batch[i][j]])
-            bbox_indices.extend(
-                [[i, aidx_per_batch[i][j], k] for k in range(4)])
-            box_delta_values.extend(box_delta_per_batch[i][j])
-            box_values.extend(bbox_per_batch[i][j])
-          else:
-            num_discarded_labels += 1
+      input_mask2, box_delta_input2, box_input2, labels2 =\
+      _load_data_per_scale(label_per_batch, box_delta_per_batch, aidx_per_batch, bbox_per_batch, 1, mc.ANCHORS2)
 
-      if mc.DEBUG_MODE:
-        print ('Warning: Discarded {}/({}) labels that are assigned to the same '
-               'anchor'.format(num_discarded_labels, num_labels))
+      input_mask3, box_delta_input3, box_input3, labels3 =\
+      _load_data_per_scale(label_per_batch, box_delta_per_batch, aidx_per_batch, bbox_per_batch, 2, mc.ANCHORS3)
+
+
+      input_mask_total = np.concatenate([input_mask, input_mask2, input_mask3], 1)
+      box_delta_input_total = np.concatenate([box_delta_input, box_delta_input2, box_delta_input3], 1)
+      box_input_total = np.concatenate([box_input, box_input2, box_input3], 1)
+      labels_total = np.concatenate([labels, labels2, labels3], 1)
+
+      # print("input_mask_shape", input_mask_total.shape)
+      # if mc.DEBUG_MODE:
+      #   print ('Warning: Discarded {}/({}) labels that are assigned to the same '
+      #          'anchor'.format(num_discarded_labels, num_labels))
 
       if load_to_placeholder:
         image_input = model.ph_image_input
@@ -202,31 +271,58 @@ def train():
         box_input = model.box_input
         labels = model.labels
 
+
       feed_dict = {
           image_input: image_per_batch,
-          input_mask: np.reshape(
-              sparse_to_dense(
-                  mask_indices, [mc.BATCH_SIZE, mc.ANCHORS],
-                  [1.0]*len(mask_indices)),
-              [mc.BATCH_SIZE, mc.ANCHORS, 1]),
-          box_delta_input: sparse_to_dense(
-              bbox_indices, [mc.BATCH_SIZE, mc.ANCHORS, 4],
-              box_delta_values),
-          box_input: sparse_to_dense(
-              bbox_indices, [mc.BATCH_SIZE, mc.ANCHORS, 4],
-              box_values),
-          labels: sparse_to_dense(
-              label_indices,
-              [mc.BATCH_SIZE, mc.ANCHORS, mc.CLASSES],
-              [1.0]*len(label_indices)),
+          input_mask: input_mask_total,
+          box_delta_input: box_delta_input_total,
+          box_input: box_input_total,
+          labels: labels_total
       }
+      # feed_dict = {
+      #     image_input: image_per_batch,
+      #     input_mask: np.reshape(
+      #         sparse_to_dense(
+      #             mask_indices, [mc.BATCH_SIZE, mc.ANCHOR_TOTAL],
+      #             [1.0]*len(mask_indices)),
+      #         [mc.BATCH_SIZE, mc.ANCHOR_TOTAL, 1]),
+      #     box_delta_input: sparse_to_dense(
+      #         bbox_indices, [mc.BATCH_SIZE, mc.ANCHOR_TOTAL, 4],
+      #         box_delta_values),
+      #     box_input: sparse_to_dense(
+      #         bbox_indices, [mc.BATCH_SIZE, mc.ANCHOR_TOTAL, 4],
+      #         box_values),
+      #     labels: sparse_to_dense(
+      #         label_indices,
+      #         [mc.BATCH_SIZE, mc.ANCHOR_TOTAL, mc.CLASSES],
+      #         [1.0]*len(label_indices)),
+      # }
 
+      # feed_dict = {
+      #     image_input: image_per_batch,
+      #     input_mask: np.reshape(
+      #         sparse_to_dense(
+      #             mask_indices, [mc.BATCH_SIZE, mc.ANCHORS],
+      #             [1.0]*len(mask_indices)),
+      #         [mc.BATCH_SIZE, mc.ANCHORS, 1]),
+      #     box_delta_input: sparse_to_dense(
+      #         bbox_indices, [mc.BATCH_SIZE, mc.ANCHORS, 4],
+      #         box_delta_values),
+      #     box_input: sparse_to_dense(
+      #         bbox_indices, [mc.BATCH_SIZE, mc.ANCHORS, 4],
+      #         box_values),
+      #     labels: sparse_to_dense(
+      #         label_indices,
+      #         [mc.BATCH_SIZE, mc.ANCHORS, mc.CLASSES],
+      #         [1.0]*len(label_indices)),
+      # }
       return feed_dict, image_per_batch, label_per_batch, bbox_per_batch
 
     def _enqueue(sess, coord):
       try:
         while not coord.should_stop():
           feed_dict, _, _, _ = _load_data()
+          # print("input.shape", feed_dict[model.ph_labels].shape)
           sess.run(model.enqueue_op, feed_dict=feed_dict)
           if mc.DEBUG_MODE:
             print ("added to the queue")
@@ -236,18 +332,19 @@ def train():
         coord.request_stop(e)
 
     sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
-
-    saver = tf.train.Saver(tf.global_variables())
+    
+    saver = tf.train.Saver(tf.global_variables(), max_to_keep=10)
     summary_op = tf.summary.merge_all()
-
-    ckpt = tf.train.get_checkpoint_state(FLAGS.train_dir)
-    if ckpt and ckpt.model_checkpoint_path:
-        saver.restore(sess, ckpt.model_checkpoint_path)
-
     summary_writer = tf.summary.FileWriter(FLAGS.train_dir, sess.graph)
+    ckpt = tf.train.get_checkpoint_state(FLAGS.train_dir)
 
-    init = tf.global_variables_initializer()
-    sess.run(init)
+    if FLAGS.resume:
+      if ckpt and ckpt.model_checkpoint_path:
+          print("restoring...", FLAGS.train_dir, ckpt.model_checkpoint_path)
+          saver.restore(sess, ckpt.model_checkpoint_path)
+    else:
+      init = tf.global_variables_initializer()
+      sess.run(init)
 
     coord = tf.train.Coordinator()
 
@@ -261,7 +358,7 @@ def train():
 
     threads = tf.train.start_queue_runners(coord=coord, sess=sess)
     run_options = tf.RunOptions(timeout_in_ms=60000)
-
+    best_map = 0
     # try: 
     for step in xrange(FLAGS.max_steps):
     # for step in xrange(1):
@@ -296,15 +393,38 @@ def train():
         summary_writer.add_summary(viz_summary, step)
         summary_writer.flush()
 
+        # if step > 10000:
+        #   test.main()
+        #   opts = options.parse_opts()
+        #   opts.eval_dir = './data/out/tmp/bbox'
+        #   scene_list =  []
+        #   for i in test_set:
+        #     scene_list.append('exp{:03d}_B'.format(i))
+        #   mAP = eval_det.eval_batch(scene_list,opts)
+        #   if (mAP > best_map):
+        #     best_map = mAP
+        #     print("best_map at step ", step)
+        #     checkpoint_path = os.path.join(FLAGS.train_dir, 'best_model.ckpt')
+        #     saver.save(sess, checkpoint_path, global_step=step)
+      
+
+
         print ('conf_loss: {}, bbox_loss: {}, class_loss: {}'.
             format(conf_loss, bbox_loss, class_loss))
       else:
+        # print("input", feed_dict[model.labels], label_per_batch)
+        # print(label_per_batch[0])
+        # print(feed_dict[model.labels][0,0,:])
+        # print(feed_dict[model.labels][0,1,:])
+        # print("input.shape", feed_dict[model.labels].shape)
+
+
         if mc.NUM_THREAD > 0:
-          _, loss_value, conf_loss, bbox_loss, class_loss = sess.run(
+          _, loss_value, conf_loss, bbox_loss, class_loss, num_objects= sess.run(
               [model.train_op, model.loss, model.conf_loss, model.bbox_loss,
-               model.class_loss], options=run_options)
+               model.class_loss, model.num_objects], options=run_options)
         else:
-          feed_dict, _, _, _ = _load_data(load_to_placeholder=False)
+          feed_dict, _, label_per_batch, bbox_per_batch = _load_data(load_to_placeholder=False)
           _, loss_value, conf_loss, bbox_loss, class_loss = sess.run(
               [model.train_op, model.loss, model.conf_loss, model.bbox_loss,
                model.class_loss], feed_dict=feed_dict)
@@ -319,16 +439,18 @@ def train():
         num_images_per_step = mc.BATCH_SIZE
         images_per_sec = num_images_per_step / duration
         sec_per_batch = float(duration)
-        format_str = ('%s: step %d, loss = %.2f (%.1f images/sec; %.3f '
+        format_str = ('%s: step %d, loss = %.2f, conf_loss = %.2f, bbox_loss = %.2f, class_loss = %.2f (%.1f images/sec; %.3f '
                       'sec/batch)')
-        print (format_str % (datetime.now(), step, loss_value,
+        print (format_str % (datetime.now(), step, loss_value,conf_loss, bbox_loss, class_loss,
                              images_per_sec, sec_per_batch))
         sys.stdout.flush()
 
       # Save the model checkpoint periodically.
       if step % FLAGS.checkpoint_step == 0 or (step + 1) == FLAGS.max_steps:
-        checkpoint_path = os.path.join(FLAGS.train_dir, 'model.ckpt')
+        checkpoint_path = os.path.join(FLAGS.train_dir, 'model_{}.ckpt'.format(step))
         saver.save(sess, checkpoint_path, global_step=step)
+        tf.train.write_graph(sess.graph.as_graph_def(), FLAGS.train_dir, 'tensorflowModel.pbtxt', as_text=True)
+
     # except Exception, e:
     #   coord.request_stop(e)
     # finally:
@@ -336,9 +458,9 @@ def train():
     #   coord.join(threads)
 
 def main(argv=None):  # pylint: disable=unused-argument
-  if tf.gfile.Exists(FLAGS.train_dir):
-    tf.gfile.DeleteRecursively(FLAGS.train_dir)
-  tf.gfile.MakeDirs(FLAGS.train_dir)
+  # if tf.gfile.Exists(FLAGS.train_dir):
+  #   tf.gfile.DeleteRecursively(FLAGS.train_dir)
+  # tf.gfile.MakeDirs(FLAGS.train_dir)
   train()
 
 

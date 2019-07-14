@@ -95,6 +95,69 @@ class imdb(object):
       scales.append((x_scale, y_scale))
 
     return images, scales
+  def calc_area(self, gt_bbox):
+    area = []
+    for i in range(len(gt_bbox)):
+      area.append(gt_bbox[i][2]*gt_bbox[i][3])
+    return np.array(area)
+
+  def iou_aid_calc(self, ANCHOR_BOX, gt_bbox):
+    aidx_per_image, delta_per_image, label_per_image_with_aidx = [], [], []
+    aidx_set = set()
+    gt_area = self.calc_area(gt_bbox)
+    for i in np.argsort(gt_area):
+      overlaps = batch_iou(ANCHOR_BOX, gt_bbox[i])
+      find = False
+      aidx = len(ANCHOR_BOX)
+      for ov_idx in np.argsort(overlaps)[::-1]:
+        if overlaps[ov_idx] <= 0:
+          # if mc.DEBUG_MODE:
+          #   min_iou = min(overlaps[ov_idx], min_iou)
+          #   num_objects += 1
+          #   num_zero_iou_obj += 1
+          break
+        if ov_idx not in aidx_set and overlaps[ov_idx] > 0.25:
+          aidx_set.add(ov_idx)
+          aidx = ov_idx
+          aidx_per_image.append([aidx, i])
+          find=True
+
+          box_cx, box_cy, box_w, box_h = gt_bbox[i]
+          delta = [0]*4
+          delta[0] = (box_cx - ANCHOR_BOX[aidx][0])/ANCHOR_BOX[aidx][2]
+          delta[1] = (box_cy - ANCHOR_BOX[aidx][1])/ANCHOR_BOX[aidx][3]
+          delta[2] = np.log(box_w/ANCHOR_BOX[aidx][2])
+          delta[3] = np.log(box_h/ANCHOR_BOX[aidx][3])
+
+          delta_per_image.append(delta)
+
+          # if mc.DEBUG_MODE:
+          #   max_iou = max(overlaps[ov_idx], max_iou)
+          #   min_iou = min(overlaps[ov_idx], min_iou)
+          #   avg_ious += overlaps[ov_idx]
+          #   num_objects += 1
+          # break
+
+      if not find: 
+        # even the largeset available overlap is 0, thus, choose one with the
+        # smallest square distance
+        dist = np.sum(np.square(gt_bbox[i] - ANCHOR_BOX), axis=1)
+        for dist_idx in np.argsort(dist):
+          if dist_idx not in aidx_set:
+            aidx_set.add(dist_idx)
+            aidx = dist_idx
+            break
+        aidx_per_image.append([aidx, i])
+
+        box_cx, box_cy, box_w, box_h = gt_bbox[i]
+        delta = [0]*4
+        delta[0] = (box_cx - ANCHOR_BOX[aidx][0])/ANCHOR_BOX[aidx][2]
+        delta[1] = (box_cy - ANCHOR_BOX[aidx][1])/ANCHOR_BOX[aidx][3]
+        delta[2] = np.log(box_w/ANCHOR_BOX[aidx][2])
+        delta[3] = np.log(box_h/ANCHOR_BOX[aidx][3])
+        delta_per_image.append(delta)
+
+    return aidx_per_image, delta_per_image
 
   def read_batch(self, shuffle=True):
     """Read a batch of image and bounding box annotations.
@@ -154,6 +217,7 @@ class imdb(object):
 
         if mc.DRIFT_X > 0 or mc.DRIFT_Y > 0:
           # Ensures that gt boundibg box is not cutted out of the image
+          # print(gt_bbox, idx)
           max_drift_x = min(gt_bbox[:, 0] - gt_bbox[:, 2]/2.0+1)
           max_drift_y = min(gt_bbox[:, 1] - gt_bbox[:, 3]/2.0+1)
           assert max_drift_x >= 0 and max_drift_y >= 0, 'bbox out of image'
@@ -192,51 +256,55 @@ class imdb(object):
       gt_bbox[:, 1::2] = gt_bbox[:, 1::2]*y_scale
       bbox_per_batch.append(gt_bbox)
 
-      aidx_per_image, delta_per_image = [], []
-      aidx_set = set()
-      for i in range(len(gt_bbox)):
-        overlaps = batch_iou(mc.ANCHOR_BOX, gt_bbox[i])
+      aidx_per_image,  delta_per_image = self.iou_aid_calc(mc.ANCHOR_BOX, gt_bbox)
+      aidx_per_image2, delta_per_image2 = self.iou_aid_calc(mc.ANCHOR_BOX2, gt_bbox)
+      aidx_per_image3, delta_per_image3 = self.iou_aid_calc(mc.ANCHOR_BOX3, gt_bbox)
+      # aidx_per_image, delta_per_image = [], []
+      # aidx_set = set()
+      # for i in range(len(gt_bbox)):
+      #   overlaps = batch_iou(mc.ANCHOR_BOX, gt_bbox[i])
 
-        aidx = len(mc.ANCHOR_BOX)
-        for ov_idx in np.argsort(overlaps)[::-1]:
-          if overlaps[ov_idx] <= 0:
-            if mc.DEBUG_MODE:
-              min_iou = min(overlaps[ov_idx], min_iou)
-              num_objects += 1
-              num_zero_iou_obj += 1
-            break
-          if ov_idx not in aidx_set:
-            aidx_set.add(ov_idx)
-            aidx = ov_idx
-            if mc.DEBUG_MODE:
-              max_iou = max(overlaps[ov_idx], max_iou)
-              min_iou = min(overlaps[ov_idx], min_iou)
-              avg_ious += overlaps[ov_idx]
-              num_objects += 1
-            break
+      #   aidx = len(mc.ANCHOR_BOX)
+      #   for ov_idx in np.argsort(overlaps)[::-1]:
+      #     if overlaps[ov_idx] <= 0:
+      #       if mc.DEBUG_MODE:
+      #         min_iou = min(overlaps[ov_idx], min_iou)
+      #         num_objects += 1
+      #         num_zero_iou_obj += 1
+      #       break
+      #     if ov_idx not in aidx_set:
+      #       aidx_set.add(ov_idx)
+      #       aidx = ov_idx
+      #       if mc.DEBUG_MODE:
+      #         max_iou = max(overlaps[ov_idx], max_iou)
+      #         min_iou = min(overlaps[ov_idx], min_iou)
+      #         avg_ious += overlaps[ov_idx]
+      #         num_objects += 1
+      #       break
 
-        if aidx == len(mc.ANCHOR_BOX): 
-          # even the largeset available overlap is 0, thus, choose one with the
-          # smallest square distance
-          dist = np.sum(np.square(gt_bbox[i] - mc.ANCHOR_BOX), axis=1)
-          for dist_idx in np.argsort(dist):
-            if dist_idx not in aidx_set:
-              aidx_set.add(dist_idx)
-              aidx = dist_idx
-              break
+      #   if aidx == len(mc.ANCHOR_BOX): 
+      #     # even the largeset available overlap is 0, thus, choose one with the
+      #     # smallest square distance
+      #     dist = np.sum(np.square(gt_bbox[i] - mc.ANCHOR_BOX), axis=1)
+      #     for dist_idx in np.argsort(dist):
+      #       if dist_idx not in aidx_set:
+      #         aidx_set.add(dist_idx)
+      #         aidx = dist_idx
+      #         break
 
-        box_cx, box_cy, box_w, box_h = gt_bbox[i]
-        delta = [0]*4
-        delta[0] = (box_cx - mc.ANCHOR_BOX[aidx][0])/mc.ANCHOR_BOX[aidx][2]
-        delta[1] = (box_cy - mc.ANCHOR_BOX[aidx][1])/mc.ANCHOR_BOX[aidx][3]
-        delta[2] = np.log(box_w/mc.ANCHOR_BOX[aidx][2])
-        delta[3] = np.log(box_h/mc.ANCHOR_BOX[aidx][3])
+      #   box_cx, box_cy, box_w, box_h = gt_bbox[i]
+      #   delta = [0]*4
+      #   delta[0] = (box_cx - mc.ANCHOR_BOX[aidx][0])/mc.ANCHOR_BOX[aidx][2]
+      #   delta[1] = (box_cy - mc.ANCHOR_BOX[aidx][1])/mc.ANCHOR_BOX[aidx][3]
+      #   delta[2] = np.log(box_w/mc.ANCHOR_BOX[aidx][2])
+      #   delta[3] = np.log(box_h/mc.ANCHOR_BOX[aidx][3])
 
-        aidx_per_image.append(aidx)
-        delta_per_image.append(delta)
-
-      delta_per_batch.append(delta_per_image)
-      aidx_per_batch.append(aidx_per_image)
+      #   aidx_per_image.append(aidx)
+      #   delta_per_image.append(delta)
+      # delta_per_batch.append(delta_per_image)
+      # aidx_per_batch.append(aidx_per_image)
+      delta_per_batch.append([delta_per_image, delta_per_image2, delta_per_image3])
+      aidx_per_batch.append([aidx_per_image, aidx_per_image2, aidx_per_image3])
 
     if mc.DEBUG_MODE:
       print ('max iou: {}'.format(max_iou))

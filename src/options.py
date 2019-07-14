@@ -21,7 +21,7 @@ def parse_opts():
                         type=int, help='training batch size')
     parser.add_argument('--test_batch', default=16,
                         type=int, help='testing batch size')
-    parser.add_argument('--num_cls', default=16, type=int,
+    parser.add_argument('--num_cls', default=22, type=int,
                         help='number of classes')
     parser.add_argument('--momentum', default=0.1, type=float, help='momentum')
     parser.add_argument('--w_decay', default=5e-4,
@@ -125,28 +125,31 @@ def parse_opts():
     opts.train_img_std = opts.imagenet_img_std
 
     # opts.gt_path = '/home/liuyanqi/caffe/adversail_training/data/SingleScenes'
-    if not opts.adv:
-        opts.gt_path='/home/liuyanqi/caffe/adversail_training/data/RGBD_Object_Dataset'
-    else:
-        opts.gt_path = '/home/liuyanqi/caffe/adversail_training/data/robust_obj_detect_adv_dataset-master'
+    # if not opts.adv:
+    #     opts.gt_path='/home/liuyanqi/caffe/adversail_training/data/RGBD_Object_Dataset'
+    # else:
+        # opts.gt_path = '/home/liuyanqi/caffe/adversail_training/data/robust_obj_detect_adv_dataset-master'
+        # opts.gt_path = '/home/liuyanqi/caffe/pyramid_cnn/data/extract/'
+    opts.gt_path = '/home/liuyanqi/caffe/pyramid_cnn/data/adversarial/'
+
     opts.out_path = './data/output/'
-    opts.labels = {'downy': 5, 'toy': 14, 'blue_cup': 1,
-                   'coke': 3, 'ranch': 6, 'spray_bottle': 10,
-                   'sugar': 11, 'tide': 13,
-                   'detergent': 4, 'clorox': 2, 'background': 0,
-                   'scotch_brite': 9, 'red_bowl': 7, 'waterpot': 15,
-                   'sunscreen': 12, 'salt': 8}
+    # opts.labels = {'downy': 5, 'toy': 14, 'blue_cup': 1,
+    #                'coke': 3, 'ranch': 6, 'spray_bottle': 10,
+    #                'sugar': 11, 'tide': 13,
+    #                'detergent': 4, 'clorox': 2, 'background': 0,
+    #                'scotch_brite': 9, 'red_bowl': 7, 'waterpot': 15,
+    #                'sunscreen': 12, 'salt': 8}
 
-    # opts.labels =  {'006_mustard_bottle': 4, '061_foam_brick': 20, '025_mug': 13,
-    #  '021_bleach_cleanser': 11, '051_large_clamp': 18, '035_power_drill': 14, 
-    #  '024_bowl': 12, '005_tomato_soup_can': 3, '009_gelatin_box': 7, '004_sugar_box': 2, 
-    #  '019_pitcher_base': 10, 'background': 21, '037_scissors': 16, '052_extra_large_clamp': 19,
-    #   '040_large_marker': 17, '010_potted_meat_can': 8, '002_master_chef_can': 0, 
-    #   '007_tuna_fish_can': 5, '036_wood_block': 15, '008_pudding_box': 6, '003_cracker_box': 1, 
-    #   '011_banana': 9}
+    opts.labels =  {'006_mustard_bottle': 4, '061_foam_brick': 20, '025_mug': 13,
+     '021_bleach_cleanser': 11, '051_large_clamp': 18, '035_power_drill': 14, 
+     '024_bowl': 12, '005_tomato_soup_can': 3, '009_gelatin_box': 7, '004_sugar_box': 2, 
+     '019_pitcher_base': 10, 'background': 21, '037_scissors': 16, '052_extra_large_clamp': 19,
+      '040_large_marker': 17, '010_potted_meat_can': 8, '002_master_chef_can': 0, 
+      '007_tuna_fish_can': 5, '036_wood_block': 15, '008_pudding_box': 6, '003_cracker_box': 1, 
+      '011_banana': 9}
 
-    opts.label_list = ['background', 'blue_cup', 'clorox', 'coke', 'detergent', 'downy', 'ranch', 'red_bowl', 'salt', 'scotch_brite', 'spray_bottle', 'sugar', 'sunscreen', 'tide', 'toy', 'waterpot']
-    # opts.label_list = ['002_master_chef_can', '003_cracker_box', '004_sugar_box', '005_tomato_soup_can', '006_mustard_bottle', '007_tuna_fish_can', '008_pudding_box', '009_gelatin_box', '010_potted_meat_can', '011_banana', '019_pitcher_base', '021_bleach_cleanser', '024_bowl', '025_mug', '035_power_drill', '036_wood_block', '037_scissors', '040_large_marker', '051_large_clamp', '052_extra_large_clamp', '061_foam_brick', 'background']
+    # opts.label_list = ['background', 'blue_cup', 'clorox', 'coke', 'detergent', 'downy', 'ranch', 'red_bowl', 'salt', 'scotch_brite', 'spray_bottle', 'sugar', 'sunscreen', 'tide', 'toy', 'waterpot']
+    opts.label_list = ['002_master_chef_can', '003_cracker_box', '004_sugar_box', '005_tomato_soup_can', '006_mustard_bottle', '007_tuna_fish_can', '008_pudding_box', '009_gelatin_box', '010_potted_meat_can', '011_banana', '019_pitcher_base', '021_bleach_cleanser', '024_bowl', '025_mug', '035_power_drill', '036_wood_block', '037_scissors', '040_large_marker', '051_large_clamp', '052_extra_large_clamp', '061_foam_brick', 'background']
 
     if opts.num_cls != len(opts.labels): # label sanity check
         raise Exception('Number of training classes does not match.')
@@ -155,8 +158,8 @@ def parse_opts():
 
     # odd for training, even for testing
     opts.train_set = range(1, 61, 2)
-    # opts.test_set = range(2, 61, 2)
-    opts.test_set = list(set(range(2, 61, 2)) - set([6, 8]))
+    opts.test_set = range(1, 41)
+    # opts.test_set = list(set(range(2, 61, 2)) - set([6, 8]))
     opts.adversarial_test_set = list(set(range(1, 21)) - set([2, 3, 4, 5, 6]))
     opts.adversarial_test_variation = ['B', 'D', 'H', 'O1', 'O2', 'O3']
     opts.traintest = opts.train_set + opts.test_set

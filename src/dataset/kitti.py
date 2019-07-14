@@ -36,7 +36,7 @@ class kitti(imdb):
 
   def _load_image_set_idx(self):
     image_set_file = os.path.join(
-        self._data_root_path, 'ImageSets', self._image_set+'.txt')
+        self._data_root_path, self._image_set+'.txt')
     assert os.path.exists(image_set_file), \
         'File does not exist: {}'.format(image_set_file)
 
@@ -45,9 +45,11 @@ class kitti(imdb):
     return image_idx
 
   def _image_path_at(self, idx):
-    image_path = os.path.join(self._image_path, idx+'.png')
-    assert os.path.exists(image_path), \
-        'Image does not exist: {}'.format(image_path)
+    image_path = os.path.join(self._image_path, idx+'.jpg')
+    if not os.path.exists(image_path):
+      image_path = os.path.join(self._image_path, idx+'.png')
+    # assert os.path.exists(image_path), \
+    #     'Image does not exist: {}'.format(image_path)
     return image_path
 
   def _load_kitti_annotation(self):
@@ -143,12 +145,12 @@ class kitti(imdb):
       if os.path.exists(det_file_name):
         with open(det_file_name, 'r') as f:
           lines = f.readlines()
-        # assert len(lines) == 3, \
-        #     'Line number of {} should be 3'.format(det_file_name)
+        assert len(lines) == 3, \
+            'Line number of {} should be 3'.format(det_file_name)
 
         aps.append(float(lines[0].split('=')[1].strip()))
-        aps.append(float(lines[0].split('=')[1].strip()))
-        aps.append(float(lines[0].split('=')[1].strip()))
+        aps.append(float(lines[1].split('=')[1].strip()))
+        aps.append(float(lines[2].split('=')[1].strip()))
       else:
         aps.extend([0.0, 0.0, 0.0])
 

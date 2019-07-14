@@ -114,6 +114,8 @@ def calc_pr_batch(dets, scene_list, opts):
     nd = len(confidence)
     tp = np.zeros((nd, 1))
     fp = np.zeros((nd, 1))
+    tp_pred = np.zeros((nd, 1))
+    fp_pred = np.zeros((nd, 1))
 
     # iter thru each detection bbox
     for d in range(0, nd):
@@ -143,7 +145,6 @@ def calc_pr_batch(dets, scene_list, opts):
                     jmax = j
 
         # assign detection as tp/fp
-        # print(ovmax, opts.ov_thresh)
         if ovmax >= opts.ov_thresh:
             if gt_det[scene_id][jmax] == 0:
                 tp[d] = 1  # true positive
@@ -153,11 +154,20 @@ def calc_pr_batch(dets, scene_list, opts):
         else:
             fp[d] = 1  # false positive
 
+        if ovmax > opts.ov_thresh:
+            tp_pred[d] = 1
+
+        else:
+            fp_pred[d] = 1  # false positive
+
     # compute precision/recall
     fp = np.cumsum(fp)
     tp = np.cumsum(tp)
+    tp_pred = np.cumsum(tp_pred)
+    fp_pred = np.cumsum(fp_pred)
     rec = np.divide(tp, npos + np.finfo(float).eps)
-    prec = np.divide(tp, fp + tp + np.finfo(float).eps)
+    prec = np.divide(tp_pred, fp_pred + tp_pred + np.finfo(float).eps)
+
     return prec, rec
 
 
@@ -167,7 +177,6 @@ def eval_batch(scene_list, opts):
     n_obj = 0
     if opts.scene_name != '':  # eval one scene
         scene_list = [opts.scene_name]
-    # opts.labels = ['scotch_brite']
     for obj in opts.labels:  # iter thru each obj
         if obj == 'background':  # skip background class
             continue
@@ -176,10 +185,9 @@ def eval_batch(scene_list, opts):
         scene_id = 0
         for scene in scene_list:  # iter thru each scene
             # read bbox file
-            dets = np.genfromtxt(opts.eval_dir + '/' +
+            dets = np.genfromtxt('./data/out/' + opts.eval_dir + '/' +
                                  opts.eval_prefix + '_' + scene + '_' +
                                  opts.test_cls + '.txt')
-
             # remove the trash
             trash_idx = np.nonzero(dets < 0)[0][::2]
             dets = np.delete(dets, trash_idx, axis=0)
@@ -201,18 +209,14 @@ def eval_batch(scene_list, opts):
 
             scene_id += 1  # increment scene_id
 
-
         # filter low likelihood bbox
         if opts.low_thresh > 0.0:
             low_idx = np.nonzero(dets_all[:, 4] < opts.low_thresh)
             dets_all = np.delete(dets_all, low_idx, axis=0)
-        # if obj =="red_bowl":
-        #     print(dets_all)
         prec, rec = calc_pr_batch(dets_all, scene_list, opts)
         ap = calc_ap(rec, prec)
-        print('Eval: {}, AP: {}, precision: {}, recall: {}'.format(obj, ap, np.mean(prec), np.mean(rec)))
-        # print(ap)
-        if ap != 0:
+        print('Eval: {}, AP: {}'.format(obj, ap))
+        if ap > 0:
             mAP += ap
             n_obj += 1
         if opts.viz_pr:
@@ -220,8 +224,6 @@ def eval_batch(scene_list, opts):
 
     mAP = mAP / n_obj
     print('mAP: {}'.format(mAP))
-    # print('Eval: {}, AP: {}, precision: {}, recall: {}'.format(obj, ap, np.mean(prec), np.mean(rec)))
-
     if opts.viz_pr:
         plt.show()
 
@@ -230,20 +232,19 @@ def eval_batch(scene_list, opts):
 
 if __name__ == "__main__":
     opts = options.parse_opts()
-    scene_list = []
-    file = open('./data/ycb_kitti/test.txt')
-    scene_list = [line[:-1] for line in file]
-    print(scene_list)
-    if opts.adv:
-        scene_variation = ["B"]
-        # scene_variation = ["B", "D", "H", "L", "O1", "O2", "O3"]
-        # scene_variation = ["D"]
-        # scene_variation = ["H", "L"]
-        # scene_variation = ["O1", "O2", "O3"]
-        # scene_variation = ["D"]
+    if opts.benchmark:
+        # scene_list = ['exp{:06d}'.format(i) for i in opts.test_set]
+        # scene_variation = ["B", "D", "D1", "D2", "O1", "O2", "O3"]
+        # scene_variation = ['D', 'D1', 'D2']
+        scene_variation = ['O1', 'O2', 'O3']
+        # scene_variation = ['B']
+
         scene_list = []
         for v in scene_variation:
-            for i in range(1,41):
+            for i in opts.test_set:
                 scene_list.append('exp{:03d}_{}'.format(i, v))
+    else:
+        scene_list = ['exp{:02d}'.format(i) for i in opts.test_set]
+
     print(scene_list)
     eval_batch(scene_list, opts)

@@ -14,12 +14,12 @@ from utils import util
 from easydict import EasyDict as edict
 import numpy as np
 import tensorflow as tf
-from nn_skeleton import ModelSkeleton
+from nn_skeleton_FPN import ModelSkeleton_FPN
 
-class SqueezeDet(ModelSkeleton):
+class SqueezeDet_FPN(ModelSkeleton_FPN):
   def __init__(self, mc, gpu_id=0):
     with tf.device('/gpu:{}'.format(gpu_id)):
-      ModelSkeleton.__init__(self, mc)
+      ModelSkeleton_FPN.__init__(self, mc)
 
       self._add_forward_graph()
       self._add_interpretation_graph()
@@ -36,6 +36,7 @@ class SqueezeDet(ModelSkeleton):
           'Cannot find pretrained model at the given path:' \
           '  {}'.format(mc.PRETRAINED_MODEL_PATH)
       self.caffemodel_weight = joblib.load(mc.PRETRAINED_MODEL_PATH)
+
 
     conv1 = self._conv_layer(
         'conv1', self.image_input, filters=64, size=3, stride=2,
@@ -73,10 +74,33 @@ class SqueezeDet(ModelSkeleton):
         'fire11', fire10, s1x1=96, e1x1=384, e3x3=384, freeze=False)
     dropout11 = tf.nn.dropout(fire11, self.keep_prob, name='drop11')
 
+
+    with tf.variable_scope("feature_pyramid") as scope:
+      p5 = self._conv_layer(
+        "top_layer", dropout11, filters=256, size=1, stride=1, relu=False)
+
+      lat4 = self._conv_layer('lat4', fire4, filters=256, size=1, stride=1, relu=False)
+      p4 = self._upsample_add(p5, lat4)
+      p4_smooth = self._conv_layer("p4_smooth", p4, filters=256, size=3, stride=1, relu=False)
+
+      lat3 = self._conv_layer("lat3", fire2, filters=256, size=1, stride=1, relu=False)
+      p3 = self._upsample_add(p4_smooth, lat3)
+      p3_smooth = self._conv_layer("p3_smooth", p3 ,filters=256, size=3, stride=1, relu=False)
+    
+
     num_output = mc.ANCHOR_PER_GRID * (mc.CLASSES + 1 + 4)
-    self.preds = self._conv_layer(
-        'conv12', dropout11, filters=num_output, size=3, stride=1,
+    with tf.variable_scope("prediction") as scope: #with tf.variable_scope("prediction", reuse=True):
+      self.preds = self._conv_layer(
+        'pred_p5', p5, filters=num_output, size=3, stride=1,
         padding='SAME', xavier=False, relu=False, stddev=0.0001)
+      self.preds_p4 = self._conv_layer(
+          'pred_p4', p4_smooth, filters=num_output, size=3, stride=1,
+          padding='SAME', xavier=False, relu=False, stddev=0.0001)
+      self.preds_p3 = self._conv_layer(
+          'pred_p3', p3_smooth, filters=num_output, size=3, stride=1,
+          padding='SAME', xavier=False, relu=False, stddev=0.0001)
+
+
 
   def _fire_layer(self, layer_name, inputs, s1x1, e1x1, e3x3, stddev=0.01,
       freeze=False):

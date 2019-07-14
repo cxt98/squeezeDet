@@ -1,8 +1,8 @@
 #!/bin/bash
 
 export GPUID=0
-export NET="squeezeDet"
-export TRAIN_DIR="/tmp/logs/SqueezeDet/"
+export NET="ZynqDet_Quant"
+export TRAIN_DIR="/tmp/logs/"+"$NET"
 
 if [ $# -eq 0 ]
 then
@@ -53,6 +53,18 @@ case "$NET" in
   "squeezeDet")
     export PRETRAINED_MODEL_PATH="./data/SqueezeNet/squeezenet_v1.1.pkl"
     ;;
+  "squeezeDet_FPN")
+    export PRETRAINED_MODEL_PATH="./data/SqueezeNet/squeezenet_v1.1.pkl"
+    ;;
+  "yolo")
+    export PRETRAINED_MODEL_PATH='./data/tiny_DarkNet/tiny-yolo.pkl'
+    ;;
+  "zynqDet" )
+    export PRETRAINED_MODEL_PATH='./data/ZynqNet/zynqnet.pkl'
+    ;;
+  "ZynqDet_Quant" )
+    export PRETRAINED_MODEL_PATH='./data/ZynqNet/zynqnet.pkl'
+    ;;
   "squeezeDet+")
     export PRETRAINED_MODEL_PATH="./data/SqueezeNet/squeezenet_v1.0_SR_0.750.pkl"
     ;;
@@ -60,7 +72,7 @@ case "$NET" in
     export PRETRAINED_MODEL_PATH="./data/ResNet/ResNet-50-weights.pkl"
     ;;
   "vgg16")
-    export PRETRAINED_MODEL_PATH="./data/VGG16/VGG_ILSVRC_16_layers_weights.pkl"
+    export PRETRAINED_MODEL_PATH="./data/VGG16/vgg16.pkl"
     ;;
   *)
     echo "net architecture not supported."
@@ -72,10 +84,12 @@ esac
 python ./src/train.py \
   --dataset=KITTI \
   --pretrained_model_path=$PRETRAINED_MODEL_PATH \
-  --data_path=./data/progress_kitti \
+  --data_path=./data/syn_combined_kitti \
   --image_set=train \
   --train_dir="$TRAIN_DIR/train" \
   --net=$NET \
   --summary_step=100 \
   --checkpoint_step=500 \
+  --max_steps=12000 \
   --gpu=$GPUID
+  --resume=True
